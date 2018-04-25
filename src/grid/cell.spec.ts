@@ -1,4 +1,5 @@
-import { Component, DebugElement, ViewChild } from "@angular/core";
+﻿import { Component, DebugElement, ViewChild } from "@angular/core";
+import { take } from "rxjs/operators";
 import { async, TestBed } from "@angular/core/testing";
 import { By } from "@angular/platform-browser";
 import { DataType } from "../data-operations/data-util";
@@ -288,6 +289,7 @@ describe("IgxGrid - Cell component", () => {
 
     it("should fit last cell in the available display container when there is vertical scroll.", () => {
         const fix = TestBed.createComponent(VirtualtGridComponent);
+        fix.componentInstance.generateData(4, 1000, 200);
         fix.detectChanges();
         const rows = fix.componentInstance.instance.rowList;
         rows.forEach((item) => {
@@ -459,6 +461,63 @@ describe("IgxGrid - Cell component", () => {
             return findCellByInputElem(elem, focusedElem.parentElement);
         }
     }));
+
+    it("should fit last cell in the available display container when there is vertical and horizontal scroll.", async(() => {
+        const fix = TestBed.createComponent(VirtualtGridComponent);
+        fix.detectChanges();
+
+        const grid = fix.componentInstance.instance;
+        const rows = fix.nativeElement.querySelectorAll("igx-grid-row");
+        const firsCell = rows[1].querySelectorAll("igx-grid-cell")[0];
+
+        expect(firsCell.textContent.trim()).toEqual("0");
+        
+        fix.componentInstance.scrollLeft(999999);
+        fix.whenStable().then(() => {
+            // This won't work always in debugging mode due to the angular native events behavior, so errors are expected
+            fix.detectChanges();
+            const lastCell = rows[1].querySelectorAll("igx-grid-cell")[3];
+            const verticalScroll = grid.verticalScrollContainer.getVerticalScroll();
+
+            expect(lastCell.textContent.trim()).toEqual("990");
+
+            // Calculate where the end of the cell is. Relative left position should equal the grid calculated width
+            expect(lastCell.getBoundingClientRect().left +
+                    lastCell.offsetWidth + 
+                    verticalScroll.offsetWidth).toEqual(grid.calcWidth);
+        });
+    }));
+
+    it("should scroll into view the not fully visible cells when navigating down", async(() => {
+        const fix = TestBed.createComponent(VirtualtGridComponent);
+        fix.detectChanges();
+
+        const grid = fix.componentInstance.instance;
+        const cells = fix.debugElement.queryAll(By.css(CELL_CSS_CLASS));;
+        let cell = cells[4 *3 + 1]; // 4 cells per row, we need 3rd row, the cell with index 1
+
+        cell.nativeElement.dispatchEvent(new Event("focus"));
+
+        fix.whenStable().then(() => {
+            fix.detectChanges();
+            expect(fix.componentInstance.selectedCell.value).toEqual(30);
+            expect(fix.componentInstance.selectedCell.column.field).toMatch("1");
+
+            const curCell = grid.getCellByColumn(3, "1");
+            curCell.onKeydownArrowDown(new KeyboardEvent("keydown", { key: "arrowdown", code: "40" }), false);
+
+            grid.verticalScrollContainer.onChunkLoad.pipe(take(1)).subscribe({
+                next: () => {
+                    const displayContainer = fix.nativeElement.querySelectorAll("igx-display-container")[1];
+                    expect(displayContainer.parentElement.scrollTop).toEqual(0);
+                    expect(fix.componentInstance.selectedCell.value).toEqual(40);
+                    expect(fix.componentInstance.selectedCell.column.field).toMatch("1");
+                }
+            });
+
+            return fix.whenStable();
+        });
+    }));
 });
 
 @Component({
@@ -522,8 +581,9 @@ export class CtrlKeyKeyboardNagivationComponent {
 
 @Component({
     template: `
-        <igx-grid [height]="'300px'" [width]="'800px'" [columnWidth]="'200px'" [data]="data" [autoGenerate]="true"
-         (onSelection)="cellSelected($event)">
+        <igx-grid [height]="gridHeight" [width]="gridWidth" [data]="data" (onSelection)="cellSelected($event)">
+            <igx-column *ngFor="let c of cols" [field]="c.field" [header]="c.field" [width]="c.width">
+            </igx-column>
         </igx-grid>
     `
 })
@@ -532,19 +592,37 @@ export class VirtualtGridComponent {
     @ViewChild(IgxGridComponent, { read: IgxGridComponent })
     public instance: IgxGridComponent;
 
-    public data = [];
     public selectedCell: IgxGridCellComponent;
 
+    public gridWidth = "800px";
+    public gridHeight = "300px";
+    public data = [];
+    public cols = [];
+
     constructor() {
-        this.data = this.generateData();
+        this.generateData(100, 1000);
     }
 
-    public generateData() {
-        const data = [];
-        for (let i = 0; i < 1000; i++) {
-            data.push({ index: i, value: i, other: i, another: i });
+    public generateData(numCols: number, numRows: number, defaultColWidth = null) {
+        const dummyData = [];
+        this.cols = [];
+        for (let j = 0; j < numCols; j++) {
+            this.cols.push({
+                field: j.toString(),
+                width: defaultColWidth !== null ? defaultColWidth : j % 8 < 2 ? 100 : (j % 6) * 125
+            });
         }
-        return data;
+
+        for (let i = 0; i < numRows; i++) {
+            const obj = {};
+            for (let j = 0; j <  this.cols.length; j++) {
+                const col = this.cols[j].field;
+                obj[col] = 10 * i * j;
+            }
+            dummyData.push(obj);
+        }
+
+        this.data = dummyData;
     }
 
     public cellSelected(event: IGridCellEventArgs) {
